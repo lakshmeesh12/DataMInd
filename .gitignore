@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+*.log
+backend/logs/
+
+# Virtual environments
+venv/
+.env
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build
+dist/
+build/
+
+# Temporary files
+.DS_Store
+Thumbs.db
+
+# Excel temporary files
+~$*.xlsx
+
+
+# Ignore temp directory
+backend/temp/

@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+pydantic
+openpyxl
+pandas
+dask[dataframe]
+unstructured[all-docs]
+python-multipart
+motor
+redis
+neo4j
+qdrant-client
+
+

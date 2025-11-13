@@ -1,0 +1,57 @@
+{
+    "answer": "The specification for the 150mm thick Aerocon wall for the Intermediate wall in the Future Expansion Area, Handwash, Plate wash, Server room, Battery UPS room, and Cafeteria is as follows:\n\n- **Construction**: Providing and constructing of AAC wall set in adhesive 5mm to 10mm thick or 1:4 cement mortar. It includes a single coat rough cement plaster on both sides of the wall in 1:4 ratio.\n- **Reinforcement**: Minimum 2 nos of 6mm dia MS bars (including tie bars) with 75mm height cement concrete at every 5 courses.\n- **Additional Features**: Rates include scaffolding, curing, RCC lintel at all heights, constructed to true line & plumb, etc., complete as per the Architect's instructions. The rate should be inclusive of masking for fixtures & wooden frames. The wall is to be built till the true ceiling.\n- **Lintel Details**: Rate includes RCC lintel with a lintel overlap length of 300mm to 450mm on both ends, varying based on door size, at necessary heights for doors (lintel at door bottom & top).\n- **Curing**: Curing of blocks to be done to the satisfaction of the Project Manager.\n- **Junction Treatment**: At the junction of RCC structure & block walls, necessary wall hacking and cement slurry to be considered on existing structure joints overlap and finished with POP punning.\n- **Density**: 550-700 kg/m³\n- **Compressive Strength**: 30-50 kg/cm²\n- **Fire Resistance**: Highly fire resistant, able to withstand standard fire for 240 minutes under load.\n- **Standards**: Products have ISI (BIS) norms and marking, conforming to Indian standards, specifically IS 2185 (part 3).\n- **Sound Absorption**: Sound absorbency of airborne sound for 3\" & 4\" walls is 38 to 40 dB.\n- **Mode of Measurement**: Wall will be measured on one side (i.e., Total length of the wall x height of wall {LxH}).\n\nThis information is sourced from the structured data in Source 2, Sheet: INTERIOR.",
+    "intent": "open_ended",
+    "entities": {
+        "keywords": [],
+        "numbers": [],
+        "operators": null
+    },
+    "sources": [
+        {
+            "document_id": "f7f277f5-56da-430f-a893-b0cb5ff1d1ea",
+            "filename": "Photon_Final Costing BOQ with Measurements.xlsx",
+            "sheet": "REST ROOM",
+            "score": 0.619,
+            "chunk_id": "7cb14e59-b4fa-4214-8ce8-ad2ff590ea03"
+        },
+        {
+            "document_id": "f7f277f5-56da-430f-a893-b0cb5ff1d1ea",
+            "filename": "Photon_Final Costing BOQ with Measurements.xlsx",
+            "sheet": "INTERIOR",
+            "score": 0.5638,
+            "chunk_id": "3a59eb41-0794-4607-aa06-af063fc00a7b"
+        },
+        {
+            "document_id": "f7f277f5-56da-430f-a893-b0cb5ff1d1ea",
+            "filename": "Photon_Final Costing BOQ with Measurements.xlsx",
+            "sheet": "VAV",
+            "score": 0.4948,
+            "chunk_id": "4b411889-79c9-41f3-9155-6acee388384a"
+        },
+        {
+            "document_id": "f7f277f5-56da-430f-a893-b0cb5ff1d1ea",
+            "filename": "Photon_Final Costing BOQ with Measurements.xlsx",
+            "sheet": "VRF SYSTEM",
+            "score": 0.4761,
+            "chunk_id": "9543136a-f6b0-42b0-ae71-5d6adce9241f"
+        },
+        {
+            "document_id": "f7f277f5-56da-430f-a893-b0cb5ff1d1ea",
+            "filename": "Photon_Final Costing BOQ with Measurements.xlsx",
+            "sheet": "HVAC Lowside",
+            "score": 0.4744,
+            "chunk_id": "b5351fb4-5a6e-495b-aa74-80a0698196f1"
+        }
+    ],
+    "retrieved_chunks": 10,
+    "graph_matches": 0,
+    "graph_data_type": "cost_item",
+    "metadata": {
+        "query": "What is the specification of 150mm thick Aerocon wall - Intermediate wall - Future Exp Area & Handwash, Plate wash,server room,Battery ups room,Cafeteria",
+        "document_ids": [
+            "f7f277f5-56da-430f-a893-b0cb5ff1d1ea"
+        ],
+        "strategy": "intent_based_retrieval"
+    },
+    "from_cache": false
+}
