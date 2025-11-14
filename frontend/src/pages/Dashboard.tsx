@@ -6,7 +6,7 @@ import TextareaAutosize from 'react-textarea-autosize';
 import { useToast } from '@/hooks/use-toast';
 import { getCurrentUser, logout } from '@/lib/auth';
 import { searchAPI, deleteFileAPI, Message, FileMetadata, SearchResponse } from '@/lib/api';
-import { loadFiles } from '@/lib/storage'; // Only files
+import { loadFiles } from '@/lib/storage';
 import ChatMessage from '@/components/ChatMessage';
 import TypingIndicator from '@/components/TypingIndicator';
 import FileUploadModal from '@/components/FileUploadModal';
@@ -33,7 +33,6 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // Messages are in-memory only (cleared on refresh)
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -54,7 +53,6 @@ const Dashboard = () => {
       navigate('/login');
       return;
     }
-    // Only load files — messages stay empty on refresh
     setFiles(loadFiles());
   }, [user, navigate]);
 
@@ -96,51 +94,71 @@ const Dashboard = () => {
       content: input.trim(),
       timestamp: Date.now(),
     };
-
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
-    // Messages are NOT saved to localStorage
-
-    const currentQuery = input.trim();
+    const updated = [...messages, userMessage];
+    setMessages(updated);
     setInput('');
     setLoading(true);
     setAutoScroll(true);
 
+    // placeholder for streaming assistant
+    const placeholder: Message = {
+      id: `msg_${Date.now()}_assistant`,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    };
+    setMessages([...updated, placeholder]);
+
     try {
-      const response: SearchResponse = await searchAPI(currentQuery);
+      let streamed = '';
+      let finalPayload: SearchResponse | null = null;
 
-      let finalContent = response.answer;
-      if (response.citations?.length) {
-        finalContent += '\n\n---\n### Citations\n';
-        finalContent += response.citations.map((c) => `* \`${c}\``).join('\n');
+      for await (const chunk of searchAPI(input.trim())) {
+        if (chunk.type === 'token') {
+          streamed += chunk.content;
+          setMessages((prev) => {
+            const copy = [...prev];
+            const idx = copy.findIndex((m) => m.id === placeholder.id);
+            if (idx !== -1) copy[idx] = { ...copy[idx], content: streamed };
+            return copy;
+          });
+        } else if (chunk.type === 'finish') {
+          finalPayload = chunk.payload;
+        }
       }
-      finalContent += `\n\n**Confidence:** ${response.confidence} | **Completeness:** ${response.completeness}`;
 
-      const assistantMessage: Message = {
-        id: `msg_${Date.now()}_assistant`,
-        role: 'assistant',
-        content: finalContent,
-        visualization: response.visualization || undefined,
-        timestamp: Date.now(),
-      };
+      // ---- final message with visualisation, citations, etc. ----
+      if (finalPayload) {
+        let finalContent = finalPayload.answer;
+        if (finalPayload.citations?.length) {
+          finalContent += '\n\n---\n### Citations\n';
+          finalContent += finalPayload.citations.map((c) => `* \`${c}\``).join('\n');
+        }
+        finalContent += `\n\n**Confidence:** ${finalPayload.confidence} | **Completeness:** ${finalPayload.completeness}`;
 
-      const finalMessages = [...updatedMessages, assistantMessage];
-      if (!autoScroll) setHasNew(true);
-      setMessages(finalMessages);
-      // No persistence
+        const finalAssistant: Message = {
+          id: placeholder.id,
+          role: 'assistant',
+          content: finalContent,
+          visualization: finalPayload.visualization || undefined,
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => {
+          const copy = [...prev];
+          const idx = copy.findIndex((m) => m.id === placeholder.id);
+          if (idx !== -1) copy[idx] = finalAssistant;
+          return copy;
+        });
+      }
     } catch (error: any) {
-      toast({
-        title: 'Query failed',
-        description: error.message || 'Please try again',
-        variant: 'destructive',
-      });
-      const errorMessage: Message = {
+      toast({ title: 'Query failed', description: error.message, variant: 'destructive' });
+      const errMsg: Message = {
         id: `msg_${Date.now()}_error`,
         role: 'assistant',
         content: `Sorry, I ran into an error: ${error.message}`,
         timestamp: Date.now(),
       };
-      setMessages([...updatedMessages, errorMessage]);
+      setMessages((prev) => [...prev.filter((m) => m.id !== placeholder.id), errMsg]);
     } finally {
       setLoading(false);
     }
@@ -164,11 +182,7 @@ const Dashboard = () => {
       setFiles(loadFiles());
       toast({ title: 'File deleted', description: 'File has been removed' });
     } catch (error: any) {
-      toast({
-        title: 'Delete failed',
-        description: error.message || 'Could not delete file',
-        variant: 'destructive',
-      });
+      toast({ title: 'Delete failed', description: error.message || 'Could not delete file', variant: 'destructive' });
     }
   };
 
@@ -184,28 +198,14 @@ const Dashboard = () => {
 
   return (
     <div className="flex h-screen w-full flex-col bg-background">
-      {/* ---------------------- Header ---------------------- */}
+      {/* Header */}
       <header className="flex h-14 items-center justify-between border-b bg-card px-4 shadow-sm">
         <div className="flex items-center gap-3">
-          {/* Mobile menu toggle */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="lg:hidden"
-          >
+          <Button variant="ghost" size="sm" onClick={() => setSidebarOpen(!sidebarOpen)} className="lg:hidden">
             {sidebarOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
           </Button>
-
-          {/* Larger Horizontal Logo */}
-          <img
-            src="/assets/Quadrant Horizontal Logo@4x.png"
-            alt="DataMind"
-            className="h-12"
-          />
+          <img src="/assets/Quadrant Horizontal Logo@4x.png" alt="DataMind" className="h-12" />
         </div>
-
-        {/* User dropdown */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="relative h-8 w-8 rounded-full">
@@ -230,14 +230,10 @@ const Dashboard = () => {
         </DropdownMenu>
       </header>
 
-      {/* ---------------------- Main Content ---------------------- */}
+      {/* Main */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div
-          className={`${
-            sidebarOpen ? 'w-64' : 'w-0'
-          } transition-all duration-300 overflow-hidden hidden lg:block`}
-        >
+        <div className={`${sidebarOpen ? 'w-64' : 'w-0'} transition-all duration-300 overflow-hidden hidden lg:block`}>
           {sidebarOpen && (
             <FilesSidebar
               files={files}
@@ -247,20 +243,15 @@ const Dashboard = () => {
           )}
         </div>
 
-        {/* Chat Area */}
+        {/* Chat */}
         <div className="flex flex-1 flex-col overflow-hidden relative">
-          {/* Sidebar Collapse Button */}
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="absolute left-0 top-4 z-20 hidden lg:flex h-8 w-8 rounded-r-md bg-card shadow-md"
           >
-            {sidebarOpen ? (
-              <ChevronLeft className="h-4 w-4" />
-            ) : (
-              <ChevronRight className="h-4 w-4" />
-            )}
+            {sidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </Button>
 
           {/* Messages */}
@@ -272,15 +263,10 @@ const Dashboard = () => {
             onTouchStart={() => setAutoScroll(false)}
           >
             <div className="mx-auto max-w-3xl space-y-4">
-              {/* Welcome Screen */}
               {messages.length === 0 && !loading && (
                 <div className="flex h-full flex-col items-center justify-center py-16 text-center">
                   <div className="mb-4 rounded-2xl bg-primary/10 p-4">
-                    <img
-                      src="/assets/Logo Icon.png"
-                      alt="DataMind"
-                      className="h-10 w-10"
-                    />
+                    <img src="/assets/Logo Icon.png" alt="DataMind" className="h-10 w-10" />
                   </div>
                   <h2 className="mb-2 text-lg font-semibold">Welcome to DataMind</h2>
                   <p className="mb-6 max-w-md text-sm text-muted-foreground">
@@ -366,7 +352,6 @@ const Dashboard = () => {
                 <Send className="h-4 w-4" />
               </Button>
             </div>
-
             <p className="mx-auto mt-1.5 max-w-3xl text-center text-xs text-muted-foreground">
               {files.length} file{files.length !== 1 ? 's' : ''} available
             </p>

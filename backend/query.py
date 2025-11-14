@@ -2,12 +2,13 @@
 import os
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, AsyncGenerator
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import ScoredPoint
 import openai
 from dotenv import load_dotenv
 import asyncio
+from openai import AsyncOpenAI
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -30,62 +31,41 @@ INITIAL_RETRIEVAL_LIMIT = 20
 # --------------------------------------------------------------------------- #
 #                         HIERARCHICAL TEXT BUILDERS                          #
 # --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# HIERARCHICAL TEXT BUILDERS
+# ---------------------------------------------------------------------------
 def build_hierarchical_context(point: ScoredPoint, query_entities: List[str] = None) -> str:
-    """
-    Build searchable text that preserves document hierarchy.
-    Filters content based on query entities to reduce noise.
-    """
     p = point.payload
     filename = p.get("filename", "Unknown")
     sheets = p.get("sheets", {})
-    
     text_blocks = []
     text_blocks.append(f"FILE: {filename}")
     text_blocks.append("=" * 80)
-    
     for sheet_name, sheet_data in sheets.items():
         text_blocks.append(f"\nSHEET: {sheet_name}")
         text_blocks.append("-" * 80)
-        
-        # Get document hierarchy
         hierarchy = sheet_data.get("hierarchy", {})
-        
-        # Document headers (project name, etc.)
         doc_metadata = hierarchy.get("document_metadata", {})
         if doc_metadata:
-            text_blocks.append("\n📋 DOCUMENT INFO:")
+            text_blocks.append("\nDOCUMENT INFO:")
             for key, value in doc_metadata.items():
                 text_blocks.append(f"  {value}")
-        
-        # Process sections with hierarchy
         sections = hierarchy.get("sections", [])
         for section in sections:
             section_code = section.get("code", "")
             section_title = section.get("title", "")
             section_text = f"{section_code} {section_title}"
-            
-            # Check if this section is relevant to query
             if query_entities:
-                section_relevant = any(
-                    entity.lower() in section_text.lower() 
-                    for entity in query_entities
-                )
+                section_relevant = any(entity.lower() in section_text.lower() for entity in query_entities)
             else:
                 section_relevant = True
-            
             if not section_relevant:
-                # Skip irrelevant sections for efficiency
                 continue
-            
-            text_blocks.append(f"\n{'  ' * section.get('level', 1)}📁 {section_text}")
-            
-            # Subsections
+            text_blocks.append(f"\n{'  ' * section.get('level', 1)}SECTION: {section_text}")
             for subsection in section.get("subsections", []):
                 subsec_title = subsection.get("title", "")
-                text_blocks.append(f"{'  ' * (section.get('level', 1) + 1)}📂 {subsec_title}")
-                
-                # Items under subsection
-                for item in subsection.get("items", [])[:30]:  # Limit items
+                text_blocks.append(f"{'  ' * (section.get('level', 1) + 1)}SUBSECTION: {subsec_title}")
+                for item in subsection.get("items", [])[:30]:
                     item_text = item.get("text", "")
                     row_context = item.get("row_context", [])
                     if row_context:
@@ -93,8 +73,6 @@ def build_hierarchical_context(point: ScoredPoint, query_entities: List[str] = N
                         text_blocks.append(f"{'  ' * (section.get('level', 1) + 2)}• {item_text} ({context_str})")
                     else:
                         text_blocks.append(f"{'  ' * (section.get('level', 1) + 2)}• {item_text}")
-            
-            # Items directly under section
             for item in section.get("items", [])[:30]:
                 item_text = item.get("text", "")
                 row_context = item.get("row_context", [])
@@ -103,8 +81,6 @@ def build_hierarchical_context(point: ScoredPoint, query_entities: List[str] = N
                     text_blocks.append(f"{'  ' * (section.get('level', 1) + 1)}• {item_text} ({context_str})")
                 else:
                     text_blocks.append(f"{'  ' * (section.get('level', 1) + 1)}• {item_text}")
-        
-        # Also include traditional table data if hierarchy is empty
         if not sections:
             tables = sheet_data.get("tables", [])
             for table in tables:
@@ -115,7 +91,6 @@ def build_hierarchical_context(point: ScoredPoint, query_entities: List[str] = N
                     row_text = " | ".join(str(c) for c in row if c is not None)
                     if row_text.strip():
                         text_blocks.append(f"    {row_text}")
-    
     return "\n".join(text_blocks)
 
 def estimate_tokens(text: str) -> int:
@@ -177,7 +152,7 @@ Return JSON:
             response_format={"type": "json_object"},
         )
         result = json.loads(resp.choices[0].message.content.strip())
-        logger.info(f"[AGENT-1] Query type: {result.get('query_type')}, Section: {result.get('section_keywords')}")
+        logger.info(f"[AGENT-1] Query type: {result.get('query_type')}")
         return result
     except Exception as e:
         logger.error(f"[AGENT-1] Failed: {e}")
@@ -190,7 +165,6 @@ Return JSON:
             "search_strategy": "Search for query terms",
             "estimated_scope": "medium"
         }
-
 # --------------------------------------------------------------------------- #
 #                    STEP 2 – CONTEXT-AWARE RETRIEVAL                         #
 # --------------------------------------------------------------------------- #
@@ -545,6 +519,87 @@ async def synthesize_hierarchical_answer(query: str, extractions: List[Dict],
             "completeness": "failed"
         }
 
+async def stream_hierarchical_search(query: str) -> AsyncGenerator[str, None]:
+    """
+    1. Run the full pipeline **once** (same accuracy).
+    2. Stream the final synthesis LLM token-by-token.
+    3. At the end send a `finish` payload with visualisation, citations, etc.
+    """
+    # ---- 1. Run the pipeline (same as /search) ----
+    full_result = await ultimate_hierarchical_search(query)
+
+    # ---- 2. Re-build the exact context string used in synthesis ----
+    extractions = full_result.get("extractions", [])
+    query_analysis = full_result.get("query_analysis", {})
+
+    context = ""
+    for ext in extractions:
+        context += f"\n{'=' * 80}\n"
+        context += f"**File**: {ext.get('filename', 'Unknown')}\n"
+        context += f"**Sheet**: {ext.get('sheet', 'Unknown')}\n"
+        context += f"**Document Context**: {ext.get('document_context', 'N/A')}\n"
+        context += f"**Section**: {ext.get('section_code', '')} {ext.get('section_title', '')}\n"
+        if ext.get('subsection'):
+            context += f"**Subsection**: {ext.get('subsection')}\n"
+        context += f"**Hierarchy**: {' → '.join(ext.get('hierarchy_path', []))}\n"
+        context += "\n**Items**:\n"
+        for item in ext.get('items', []):
+            item_text = item.get('item', '')
+            item_ctx = item.get('context', '')
+            row_ctx = item.get('row_context', [])
+            row_ctx_str = " | ".join(str(v) for v in row_ctx if v is not None)
+            if item_text in row_ctx_str:
+                context += f"  - Data Row: [{row_ctx_str}]\n"
+            else:
+                context += f"  - Item: {item_text} (Context: {item_ctx}) (Data: {row_ctx_str})\n"
+        context += "\n"
+
+    # ---- 3. Build the same prompt you use in synthesize_hierarchical_answer ----
+    prompt = f"""You are the **Hierarchical Answer Synthesis Agent** with data visualization capabilities. **User Query**: {query} **Query Analysis**:
+* Looking for: {', '.join(query_analysis.get('section_keywords', []))}
+* In document: {', '.join(query_analysis.get('document_context_keywords', []))}
+* Expected format: {query_analysis.get('expected_format', 'list')} **Extracted Data with Context**: {context} **SYNTHESIS INSTRUCTIONS**:
+1. **Analyze Data**: Look at the extracted items in the context.
+2. **Decide Visualization**: ...
+3. **Format Data**: ...
+4. **CRITICAL DATA EXTRACTION RULE**: ...
+5. **Write Answer**: Write a text summary (answer) that introduces the data.
+6. **Be Complete**: Ensure all data is used in *either* the text or the visualization.
+**Return JSON**: {{ "answer": "...", "visualization": {{...}} | null, "citations": [...], ... }}"""
+
+    # ---- 4. Stream the LLM ----
+    client = AsyncOpenAI()
+    stream = await client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=6000,
+        stream=True,
+    )
+
+    async for chunk in stream:
+        delta = chunk.choices[0].delta.content or ""
+        if delta:
+            yield json.dumps({"type": "token", "content": delta}) + "\n"
+
+    # ---- 5. Send final payload (visualisation, citations, etc.) ----
+    # Build final answer text (fallback if streaming fails)
+    final_text = full_result.get("answer", "")
+    if full_result.get("citations"):
+        final_text += "\n\n---\n### Citations\n"
+        final_text += "\n".join(f"* `{c}`" for c in full_result["citations"])
+    final_text += f"\n\n**Confidence:** {full_result.get('confidence')} | **Completeness:** {full_result.get('completeness')}"
+
+    payload = {
+        "type": "finish",
+        "answer": final_text,
+        "visualization": full_result.get("visualization"),
+        "citations": full_result.get("citations", []),
+        "confidence": full_result.get("confidence"),
+        "completeness": full_result.get("completeness"),
+        "query_analysis": full_result.get("query_analysis"),
+    }
+    yield json.dumps(payload) + "\n"
 
 # --------------------------------------------------------------------------- #
 #                    MAIN ORCHESTRATOR                                        #
@@ -553,16 +608,16 @@ async def ultimate_hierarchical_search(query: str) -> Dict[str, Any]:
     """
     Master orchestrator for hierarchical search.
     Coordinates multiple specialized agents:
-    1️⃣ Query Analysis → 2️⃣ Retrieval → 3️⃣ Filtering → 4️⃣ Extraction → 5️⃣ Synthesis
+    1️ Query Analysis → 2️ Retrieval → 3️ Filtering → 4️ Extraction → 5 Synthesis
     """
     logger.info("\n" + "=" * 100)
-    logger.info("🏗️  HIERARCHICAL SEARCH STARTED")
+    logger.info("HIERARCHICAL SEARCH STARTED")
     logger.info("=" * 100)
 
-    # 🧩 AGENT 1: Hierarchical Query Analysis
+    # AGENT 1: Hierarchical Query Analysis
     query_analysis = await analyze_hierarchical_query(query)
 
-    # 🔍 AGENT 2: Hierarchical Retrieval
+    # AGENT 2: Hierarchical Retrieval
     points = await hierarchical_retrieval(query, query_analysis)
     if not points:
         return {
@@ -573,7 +628,7 @@ async def ultimate_hierarchical_search(query: str) -> Dict[str, Any]:
             "query_analysis": query_analysis,
         }
 
-    # 🧱 AGENT 3: Hierarchical Filtering
+    # AGENT 3: Hierarchical Filtering
     docs = await filter_by_hierarchy(query, points, query_analysis)
     if not docs:
         return {
@@ -584,7 +639,7 @@ async def ultimate_hierarchical_search(query: str) -> Dict[str, Any]:
             "query_analysis": query_analysis,
         }
 
-    # 🧠 AGENT 4: Hierarchical Extraction
+    # AGENT 4: Hierarchical Extraction
     extractions = await extract_with_hierarchy(query, docs, query_analysis)
     if not extractions:
         return {
@@ -596,12 +651,12 @@ async def ultimate_hierarchical_search(query: str) -> Dict[str, Any]:
             "documents_searched": [d.get("filename", "Unknown") for d in docs],
         }
 
-    # 🧾 AGENT 5: Hierarchical Synthesis
+    # AGENT 5: Hierarchical Synthesis
     result = await synthesize_hierarchical_answer(query, extractions, query_analysis)
     result["query_analysis"] = query_analysis
 
     logger.info("\n" + "=" * 100)
-    logger.info(f"✅ HIERARCHICAL SEARCH COMPLETE: {result.get('completeness', 'unknown')} answer")
+    logger.info(f"HIERARCHICAL SEARCH COMPLETE: {result.get('completeness', 'unknown')} answer")
     logger.info("=" * 100 + "\n")
 
     return result

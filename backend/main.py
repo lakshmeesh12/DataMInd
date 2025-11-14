@@ -2,7 +2,7 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Query
 from fastapi.responses import JSONResponse
 from ingest import ingest_excel_files, close_neo4j_driver
-from typing import List, Optional
+from typing import List, Optional, AsyncGenerator
 import uvicorn
 import logging
 from contextlib import asynccontextmanager
@@ -18,14 +18,19 @@ from search import (
 )
 from typing import List, Optional
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.responses import JSONResponse
 from typing import Optional, List
 from pydantic import BaseModel
 import logging
 from fastapi import Query
 from query import search_documents
+from query import (
+    ultimate_hierarchical_search,
+    stream_hierarchical_search,        # <-- NEW
+)
 from fastapi.middleware.cors import CORSMiddleware
-
+from visual import visualize_document
 # Import Neo4j query utilities
 from neo4j_queries import (
     get_document_overview,
@@ -111,20 +116,56 @@ async def ingest_excel_batch(
         logger.error(f"Batch ingestion failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
+# ----------------------------------------------------------------------
+# LEGACY NON-STREAMING SEARCH (kept for backward compatibility)
+# ----------------------------------------------------------------------
 @app.get("/search")
 async def search_endpoint(
-    q: str = Query(..., description="Natural language query about the uploaded Excel BOQ files")
+    q: str = Query(..., description="Natural language query")
+):
+    result = await ultimate_hierarchical_search(q)
+    return result
+
+# ----------------------------------------------------------------------
+# NEW STREAMING SEARCH ENDPOINT
+# ----------------------------------------------------------------------
+@app.get("/search-stream")
+async def search_stream_endpoint(
+    q: str = Query(..., description="Natural language query (streaming)")
 ):
     """
-    Robust search over all uploaded Excel documents.
-    Supports:
-    - Multi-sheet, multi-workbook queries
-    - Cost totals, item rates, quantities
-    - Cross-document comparisons
-    - Natural language (e.g., "What is the total cost of interior works in Photon project?")
+    Runs the full hierarchical pipeline **once** and then streams the
+    final LLM synthesis token-by-token (NDJSON).
     """
-    result = await search_documents(q)
-    return result
+    async def event_generator():
+        async for line in stream_hierarchical_search(q):
+            yield line
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+@app.get("/visualize")
+async def visualize(
+    doc_id: Optional[str] = Query(None, description="Document ID from ingestion"),
+    filename: Optional[str] = Query(None, description="Exact filename to visualize")
+):
+    """
+    Visualize uploaded document using Qdrant + Neo4j.
+    Returns structured JSON for charts + knowledge graph.
+    """
+    if not doc_id and not filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'doc_id' or 'filename' as query parameter"
+        )
+
+    try:
+        result = await visualize_document(doc_id=doc_id, filename=filename)
+        return JSONResponse(status_code=200, content=result)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Visualization failed: {e}")
+        raise HTTPException(status_code=500, detail="Visualization failed")
     
 class QueryRequest(BaseModel):
     question: str
